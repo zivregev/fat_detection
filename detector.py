@@ -43,16 +43,10 @@ def build_contour(interior):
         for y, x in get_px_neighbours(px, interior.shape):
             if interior[y, x] == 0:
                 contour[y, x] = 1
-    # print(f"shape: {numpy.where(interior == 1)}, contour: {numpy.where(contour == 1)}")
-    # contour = []
-    # for px in interior:
-    #     for y, x in get_px_neighbours(px, space.shape):
-    #         if (y, x) not in interior:
-    #             contour.append((y, x))
     return contour
 
 
-def break_shape_at_contours(shape, contour):
+def old_break_shape_at_contours(shape, contour):
     shapes = []
     interior = zip(*numpy.where(numpy.logical_and(shape == 1, contour == 0)))
     for idx in interior:
@@ -67,40 +61,45 @@ def break_shape_at_contours(shape, contour):
                         shape[y, x] = 0
                 sub_shape[curr_px] = 1
             shapes.append((sub_shape, build_contour(sub_shape)))
-    # while len(interior) > 0:
-    #     sub_shape = []
-    #     fringe = [interior.pop()]
-    #     while len(fringe) > 0:
-    #         curr_px = fringe.pop()
-    #         for y, x in get_px_neighbours(curr_px, space.shape):
-    #             if (y, x) in interior:
-    #                 fringe.append((y, x))
-    #                 sub_shape.append((y, x))
-    #                 interior.remove((y, x))
-    #     if len(sub_shape) > 0:
-    #         shapes.append((sub_shape, build_contour(space, sub_shape)))
     return shapes
+
+
+def break_shape_at_contours(shape_mask, contour_mask, shape, contour, curr_shape_index):
+    interior = numpy.zeros(shape.shape)
+    interior[numpy.where(numpy.logical_and(shape == 1, contour == 0))] = 1
+    for idx in zip(*numpy.where(interior == 1)):
+        if interior[idx] == 1:
+            fringe = [idx]
+            while len(fringe) > 0:
+                curr_px = fringe.pop()
+                for y, x in get_px_neighbours(curr_px, shape.shape):
+                    if interior[y, x] == 1:
+                        fringe.append((y, x))
+                        interior[y, x] = 0
+                shape_mask[curr_px] = curr_shape_index
+            curr_shape_index += 1
+    return curr_shape_index
 
 
 # assumes that space[starting_px] == 0
 def get_contiguous_shape(space, starting_px, visited):
-    shape = numpy.zeros(space.shape)
-    contour = numpy.zeros(space.shape)
+    shape = numpy.zeros(space.shape, dtype=bool)
+    contour = numpy.zeros(space.shape, dtype=bool)
     fringe = [starting_px]
     while len(fringe) > 0:
         curr_px = fringe.pop()
         is_contour = False
         for y, x in get_px_neighbours(curr_px, space.shape):
-            if space[y, x] == 0:
-                if visited[y, x] == 0:
+            if not space[y, x]:
+                if not visited[y, x]:
                     fringe.append((y, x))
-                    visited[y, x] = 1
+                    visited[y, x] = True
             else:
                 is_contour = True
         if is_contour:
-            contour[curr_px] = 1
+            contour[curr_px] = True
         else:
-            shape[curr_px] = 1
+            shape[curr_px] = True
     return shape, contour
 
 
@@ -130,8 +129,35 @@ def guess_whether_round(contour, tol=0.2):
        return False
 
 
-def process_img(imgfile, outfile):
-    img = cv2.imread(img_file)
+def remove_contours(space, passes=1):
+    for i in range(passes):
+        visited = numpy.zeros(space.shape, dtype=bool)
+        for y in range(space.shape[0]):
+            for x in range(space.shape[1]):
+                if not visited[y, x]:
+                    if not space[y, x]:
+                        _, contour = get_contiguous_shape(space, (y, x), visited)
+                        space[contour == True] = True
+
+
+def get_shapes_and_contours(space):
+    visited = numpy.zeros(space.shape, dtype=bool)
+    shapes = numpy.zeros(space.shape, dtype=numpy.int)
+    contours = numpy.zeros(space.shape, dtype=numpy.int)
+    shape_num = 1
+    for y in range(space.shape[0]):
+        for x in range(space.shape[1]):
+            if not visited[y, x]:
+                if not space[y, x]:
+                    shape, contour = get_contiguous_shape(space, (y, x), visited)
+                    shapes[shape == True] = shape_num
+                    contours[contour == True] = shape_num
+                    shape_num += 1
+    return shapes, contours, shape_num
+
+
+def old_process_img(img_file, out_file):
+    img = cv2.imread(img_file)[:1000, :1000]
     bw_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, bw_mask = cv2.threshold(bw_img, 175, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C)
     visited = numpy.zeros(bw_mask.shape)
@@ -146,33 +172,30 @@ def process_img(imgfile, outfile):
                         shapes[shape == 1] = shape_num
                         contours[contour == 1] = shape_num
                         shape_num += 1
-                    # shape, contour = get_contiguous_shape(bw_mask, (y, x), visited)
-                    # shapes[shape == 1] = shape_num
-                    # shapes[contour == 1] = shape_num + 0.5
-                    # shape_num += 1
-                    # shapes.extend(break_shape_at_contours(bw_mask, *get_contiguous_shape(bw_mask, (y, x), visited)))
     for i in range(1, shape_num):
         img[numpy.where(shapes == i)] = [255*float(i)/float(shape_num), 0, 255*float(shape_num-i)/float(shape_num)]
         img[numpy.where(contours == i)] = [0, 100, 0]
-    # for i, shape in enumerate(shapes):
-    #     c = [255*float(i)/float(len(shapes)), 0, 255*float(len(shapes)-i)/float(len(shapes))]
-    #     print(len(shape))
-    #     interior, contour = shape
-    #
-    #     img[interior == 1] = c
-    #     img[contour == 1] = [0, 100, 0]
-        # c = [0, 0, 0] if guess_whether_round(contour) else [255, 255, 255]
-        # print(c)
-
-        # for y, x in interior:
-        #     img[y, x] = c
-        #
-        # for y, x in contour:
-        #     img[y, x] = [0, 100, 0]
-        #
         # centroid_y, centroid_x = find_centroid(contour)
         # img[centroid_y, centroid_x] = [0, 0, 0]
     show_img(img)
+
+
+def process_img(img_file, outfile):
+    img = cv2.imread(img_file)[:1000, :1000]
+    bw_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, bw_mask = cv2.threshold(bw_img, 175, True, cv2.ADAPTIVE_THRESH_GAUSSIAN_C)
+    bw_mask = numpy.asarray(bw_mask, dtype=bool)
+    # first pass, try to remove some contours
+    remove_contours(bw_mask, 1)
+    # 2nd pass, grab shapes
+    shapes, contours, num_of_shapes = get_shapes_and_contours(bw_mask)
+    for i in range(1, num_of_shapes):
+        img[numpy.where(shapes == i)] = [255*float(i)/float(num_of_shapes), 0, 255*float(num_of_shapes-i)/float(num_of_shapes)]
+        img[numpy.where(contours == i)] = [0, 100, 0]
+        # centroid_y, centroid_x = find_centroid(contour)
+        # img[centroid_y, centroid_x] = [0, 0, 0]
+    show_img(img)
+
 
 total_time = {}
 
@@ -194,6 +217,8 @@ process_img = timer(process_img)
 break_shape_at_contours = timer(break_shape_at_contours)
 get_contiguous_shape = timer(get_contiguous_shape)
 build_contour = timer(build_contour)
+remove_contours = timer(remove_contours)
+get_shapes_and_contours = timer(get_shapes_and_contours)
 
 process_img(img_file, out_file)
 
