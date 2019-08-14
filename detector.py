@@ -98,23 +98,11 @@ def color_contour_extremes(img, extremes, centroids, num_of_shapes):
     for i in range(1, num_of_shapes):
         try:
             centroid = tuple(centroids[i][::-1])
-            # print(farthest[i])
             closest_pt, farthest_pt = map(lambda pt: tuple(pt[::-1]), extremes[i])
-             # = tuple(closest[i][::-1])
             cv2.line(img, centroid, farthest_pt, [255, 255, 0])
             cv2.line(img, centroid, closest_pt, [0, 255, 255])
         except KeyError:
             pass
-
-#
-#
-# def guess_whether_round(contour, tol=0.2):
-#    closest, farthest = calc_contour_extremes(contour)
-#    # print(f"{closest}, {farthest}")
-#    if closest/farthest > tol:
-#        return True
-#    else:
-#        return False
 
 
 @timer
