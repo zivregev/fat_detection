@@ -113,10 +113,10 @@ def remove_contours(space, passes=1):
 
 
 @timer
-def find_shapes_and_contours(space, save_centroids=False):
+def find_shapes_and_contours(space, save_shape_parameters=False):
     labels = numpy.zeros(space.shape, int)
     contours = numpy.zeros(space.shape, int)
-    if save_centroids:
+    if save_shape_parameters:
         centroids = {}
         extremes = {}
     curr_shape = 0
@@ -138,20 +138,20 @@ def find_shapes_and_contours(space, save_centroids=False):
                         is_contour = True
                 if is_contour:
                     contours[curr_px] = curr_shape
-                    if save_centroids:
+                    if save_shape_parameters:
                         contour.append(curr_px)
-                elif save_centroids:
+                elif save_shape_parameters:
                     centroid_accum[0] += curr_px[0]
                     centroid_accum[1] += curr_px[1]
                     centroid_accum[2] += 1
-            if centroid_accum[2] > 0 and save_centroids:
+            if save_shape_parameters and centroid_accum[2] > 0:
                 y_centroid, x_centroid = [int(coord/centroid_accum[2]) for coord in centroid_accum[:2]]
                 centroid = (y_centroid, x_centroid)
                 centroids[curr_shape] = centroid
                 contour = numpy.asarray(contour, dtype= int)
                 distances = numpy.linalg.norm(contour - centroid, axis=1)
                 extremes[curr_shape] = (contour[distances.argmin()], contour[distances.argmax()])
-    if save_centroids:
+    if save_shape_parameters:
         return labels, contours, centroids, extremes, curr_shape
     else:
         return labels, contours, curr_shape
@@ -178,7 +178,7 @@ def process_img(img_file, outfile):
     # first pass, try to remove some contours
     remove_contours(bw_mask, 1)
     # 2nd pass, grab shapes
-    shapes, contours, centroids, extremes, num_of_shapes = find_shapes_and_contours(bw_mask, save_centroids=True)
+    shapes, contours, centroids, extremes, num_of_shapes = find_shapes_and_contours(bw_mask, save_shape_parameters=True)
     color_shapes_and_contours(img, shapes, contours, num_of_shapes)
     # centroids
     color_centroids(img, centroids)
