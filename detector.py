@@ -7,13 +7,10 @@ import time
 import enum
 import sklearn.neighbors
 
-class ShapeTypes(enum.Enum):
-    fat_cell = 0
-    sinusoid = 1
-    blood_vessel = 2
-    other = 4
+param_dtype = np.dtype([('id', int), ('size', int), ('centroid_y', int), ('centroid_x', int), ('min_pt_y', int), ('min_pt_x', int), ('max_pt_y', int), ('max_pt_x', int), ('skew', float)])
 
 total_time = {}
+
 
 def timer(func):
     total_time[func] = 0
@@ -49,7 +46,7 @@ def save_fig(img, name):
     ax.axis("off")
     ax.imshow(img, cmap="gray")
     plt.savefig(name)
-    plt.clf()
+    plt.close(fig)
 
 
 def get_px_neighbours(px, bounds=None):
@@ -69,6 +66,89 @@ def find_centroids(shapes, num_of_shapes):
         x_center, y_center = map(int, pts.sum(0)/len(pts))
         centroid_mask[int(x_center), int(y_center)] = shape
     return centroid_mask
+
+
+@timer
+def map_ids_to_idxs(mask_with_ids):
+    ar_ = mask_with_ids.flatten()
+    ids, cnt = np.unique(ar_, return_counts=True)
+    perm = ar_.argsort()
+    if ids[0] == 0:
+        s_idx = cnt[0]
+        ids, cnt = ids[1:], cnt[1:]
+    else:
+        s_idx = 0
+    idx_map = []
+    for i in range(len(ids)):
+        e_idx = s_idx + cnt[i]
+        idx_map.append(np.unravel_index(perm[s_idx:e_idx], mask_with_ids.shape))
+        s_idx = e_idx
+    return ids, idx_map
+
+
+@timer
+def get_non_trivial_submask_shape_ids(mask_shape_idxs, submask_shapes, percent_of_subshape_to_include=0.01):
+    shape_in_submask = submask_shapes[mask_shape_idxs]
+    shape_in_submask = shape_in_submask[shape_in_submask > 0]
+    submask_ids_in_shape, counts = np.unique(shape_in_submask, return_counts=True)
+    nontrivial_shapes_in_submask = \
+        submask_ids_in_shape[np.where(counts > percent_of_subshape_to_include * len(shape_in_submask.flatten()))]
+    return nontrivial_shapes_in_submask
+
+
+@timer
+def find_split_shapes(mask_shapes, submask_shapes):
+    mask_idx_map = map_ids_to_idxs(mask_shapes)
+    split_shapes = {}
+    for shape_id, shape_idxs in zip(*mask_idx_map):
+        nontrivial_shapes_in_submask = get_non_trivial_submask_shape_ids(shape_idxs, submask_shapes)
+        if len(nontrivial_shapes_in_submask) > 1:
+            split_shapes[shape_id] = nontrivial_shapes_in_submask
+    return split_shapes
+
+
+@timer
+def assign_new_ids(split_ids, next_id):
+    for org_id in split_ids:
+        subshape_ids = split_ids[org_id]
+        split_ids[org_id] = (subshape_ids, list(range(next_id, next_id + len(subshape_ids))))
+        next_id += len(subshape_ids)
+
+
+@timer
+def split_shapes(shapes_mask, shapes_submask, contours_mask, contours_submask):
+    split_ids = find_split_shapes(shapes_mask, shapes_submask)
+    next_id = np.max(shapes_mask) + 1
+    assign_new_ids(split_ids, next_id)
+    split_id_based_array(shapes_mask, shapes_submask, split_ids)
+    split_id_based_array(contours_mask, contours_submask, split_ids)
+    return split_ids
+
+
+@timer
+def split_id_based_array(ar, sub_ar, split_ids):
+    ar[np.where(np.isin(ar, list(split_ids.keys())))] = 0
+    sub_ar_idx_map = {id: idxs for id, idxs in zip(*map_ids_to_idxs(sub_ar))}
+    for org_id in split_ids:
+        subshape_ids, new_ids = split_ids[org_id]
+        for subshape_id, new_id in zip(subshape_ids, new_ids):
+            ar[sub_ar_idx_map[subshape_id]] = new_id
+
+
+@timer
+def update_split_shape_params(params, sub_params, split_ids):
+    removed_ids, _tmp = zip(*list(split_ids.items()))
+    submask_ids, new_ids = map(np.concatenate, map(np.asarray, zip(*_tmp)))
+    #remove shapes w/ no prms, & sort by ascending id
+    submask_ids_with_params = np.isin(submask_ids, sub_params['id'])
+    submask_ids = submask_ids[submask_ids_with_params]
+    new_ids = new_ids[submask_ids_with_params]
+    sorted_ids = np.argsort(submask_ids)
+    submask_ids = submask_ids[sorted_ids]
+    new_ids = new_ids[sorted_ids]
+    subshape_rows = sub_params[np.where(np.isin(sub_params['id'], submask_ids))]
+    subshape_rows['id'] = new_ids[np.where(np.isin(submask_ids, sub_params['id']))]
+    return np.append(np.delete(params, np.where(np.isin(params['id'], removed_ids))), subshape_rows)
 
 
 @timer
@@ -101,30 +181,37 @@ def calc_contour_extremes(contours, centroids, num_of_shapes):
 
 
 @timer
-def color_contour_extremes(img, extremes, centroids, num_of_shapes):
-    for i in range(1, num_of_shapes):
-        color_single_shape_extremes(img, extremes, centroids, i)
+def color_contour_extremes(img, shape_params):
+    for i in shape_params['id']:
+        color_single_shape_extremes(img, shape_params, i)
 
 
 @timer
-def color_single_shape_extremes(img, extremes, centroids, shape_num):
-    try:
-        # print(shape_num)
-        centroid = tuple(centroids[shape_num][::-1])
-        # print(extremes[shape_num])
-        # print(tuple(extremes[shape_num][::-1]))
-        closest_pt, farthest_pt = map(lambda pt: tuple(pt[::-1]), extremes[shape_num])
-        cv2.line(img, centroid, farthest_pt, [255, 255, 0])
-        cv2.line(img, centroid, closest_pt, [0, 255, 255])
-    except KeyError:
-        pass
+def color_single_shape_extremes(img, shape_params, shape_num):
+    params = shape_params[np.where(shape_params['id'] == shape_num)]
+    centroid = (params['centroid_x'], params['centroid_y'])
+    closest_pt = (params['min_pt_x'], params['min_pt_y'])
+    farthest_pt = (params['max_pt_x'], params['max_pt_y'])
+    cv2.line(img, centroid, farthest_pt, [255, 255, 0])
+    cv2.line(img, centroid, closest_pt, [0, 255, 255])
 
 
 @timer
-def remove_contours(space, passes=1):
-    for i in range(passes):
-        _, contours, _ = find_shapes_and_contours(space)
-        space[contours > 0] = True
+def remove_contours_from_copy(space):
+    space_ = np.copy(space)
+    _, contours = find_shapes_and_contours(space_)
+    space_[contours > 0] = True
+    return space_
+
+
+@timer
+def build_contourless_masks(space, num_of_masks=2):
+    #drop first set of contours
+    masks = [remove_contours_from_copy(space)]
+    for i in range(1, num_of_masks):
+        masks.append(remove_contours_from_copy(masks[-1]))
+    return masks
+
 
 
 @timer
@@ -132,9 +219,7 @@ def find_shapes_and_contours(space, save_shape_parameters=False):
     labels = np.zeros(space.shape, int)
     contours = np.zeros(space.shape, int)
     if save_shape_parameters:
-        centroids = {}
-        extremes = {}
-        skews = {}
+        shape_parameters = []
     curr_shape = 0
     for idx, val in np.ndenumerate(space):
         if not val and labels[idx] == 0:
@@ -142,14 +227,18 @@ def find_shapes_and_contours(space, save_shape_parameters=False):
             fringe = [idx]
             centroid_accum = [0, 0, 0]
             contour = []
+            size = 0
             while len(fringe) > 0:
                 curr_px = fringe.pop()
                 is_contour = False
+                if len(curr_px)  < 2:
+                    print( curr_px)
                 for y, x in get_px_neighbours(curr_px, space.shape):
                     if space[y, x] == 0:
                         if labels[y, x] == 0:
                             labels[y, x] = curr_shape
                             fringe.append((y, x))
+                            size += 1
                     else:
                         is_contour = True
                 if is_contour:
@@ -167,21 +256,28 @@ def find_shapes_and_contours(space, save_shape_parameters=False):
                     contour = np.asarray(contour, dtype=int)
                     distances = np.linalg.norm(contour - centroid, axis=1)
                     extreme_pts = (contour[distances.argmin()], contour[distances.argmax()])
-                # else:
-                #     centroid = (None, None)
-                #     extreme_pts = (None, None)
-                    centroids[curr_shape] = centroid
-                    extremes[curr_shape] = extreme_pts
                     radii = list(map(lambda p: np.linalg.norm(centroid - p), extreme_pts))
-                    skews[curr_shape] = radii[0] / radii[1]
+                    skew = radii[0] / radii[1]
+                    extreme_pts = [coord for pt in list(map(list, extreme_pts)) for coord in pt]
+                    shape_parameters.append((curr_shape, size, *centroid, *extreme_pts, skew))
     if save_shape_parameters:
-        return labels, contours, centroids, extremes, skews, curr_shape
+        return labels, contours, np.array(shape_parameters, dtype=param_dtype)
+        # return labels, contours, shape_parameters, curr_shape
     else:
-        return labels, contours, curr_shape
+        return labels, contours
 
 
 @timer
-def color_shapes_and_contours(img, shapes, contours, num_of_shapes):
+def color_img_by_id_map(img, id_mapping, ids, color=(0, 100, 0)):
+    idxs = np.where(np.isin(id_mapping, ids))
+    img[idxs + (0,)] = color[0]
+    img[idxs + (1,)] = color[1]
+    img[idxs + (2,)] = color[2]
+
+
+@timer
+def color_shapes_and_contours(img, shapes, contours, shape_params=None, color_extremes=False):
+    num_of_shapes = len(np.unique(shapes[shapes > 0]))
     shape_idxs = np.where(shapes > 0)
     img[shape_idxs + (0,)] = (255/float(num_of_shapes)) * shapes[shape_idxs]
     img[shape_idxs + (1,)] = 0
@@ -190,6 +286,8 @@ def color_shapes_and_contours(img, shapes, contours, num_of_shapes):
     img[contour_idxs + (0,)] = 0
     img[contour_idxs + (1,)] = 100
     img[contour_idxs + (2,)] = 0
+    if color_extremes:
+        color_contour_extremes(img, shape_params)
 
 
 @timer
@@ -207,30 +305,34 @@ def head_tail_breaks(shapes_sizes, key_idx = 1, iterations=100, tol=0.3):
 
 
 @timer
-def cluster_shapes(shapes, cluster_func, *args, **kwargs):
-    shapes_sizes = list(map(tuple, zip(*np.unique(shapes[shapes > 0], return_counts=True))))
-    shapes_sizes.sort(key=lambda shape: shape[1], reverse=True)
-    shapes_sizes = np.asarray(shapes_sizes, dtype=int)
-    return cluster_func(shapes_sizes, *args, **kwargs)
+def cluster_shapes_by(shape_params, column_name, cluster_func, *args, **kwargs):
+    by_column = np.sort(shape_params, order=[column_name])[::-1]
+    clusters = cluster_func(shape_params[column_name], *args, **kwargs)
+    classified = []
+    starting_idx = 0
+    for cluster_len in clusters:
+        end_idx = starting_idx + cluster_len
+        classified.append(np.array(by_column['id'][starting_idx:end_idx], dtype=int))
+        starting_idx = end_idx
+    return classified
+
 
 @timer
-def cluster_by_size_kde(shapes_sizes, bandwidth=2.0, samples=6000):
-    sizes = shapes_sizes[:, 1]
+def cluster_by_kde(sizes, bandwidth=2.0, samples=6000):
     s_d = np.linspace(0.8 * np.min(sizes), 1.2 * np.max(sizes), samples)
     kde = sklearn.neighbors.KernelDensity(bandwidth=bandwidth, kernel="gaussian").fit(sizes.reshape(-1, 1))
     logprob = kde.score_samples(s_d.reshape(-1, 1))
     mins = s_d[scipy.signal.argrelextrema(logprob, np.less)]
     mins = list(mins)
     mins = [-float('inf')] + mins + [float('inf')]
-    clustered = [shapes_sizes[(shapes_sizes[:, 1] >= mins[i - 1]) * (shapes_sizes[:, 1] < mins[i]), 0] for i in range(1, len(mins))]
-    return clustered
+    # clustered = [shapes_sizes[(shapes_sizes[:, 1] >= mins[i - 1]) * (shapes_sizes[:, 1] < mins[i]), 0] for i in range(1, len(mins))]
+    clusters = [np.count_nonzero((sizes >= mins[i-1]) & (sizes < mins[i])) for i in range(1, len(mins))]
+    clusters.reverse()
+    return clusters
 
 @timer
-def classify_shapes(shapes, centroids, extremes, num_of_shapes, skew_tol=0.2):
-    # classified = cluster_by_size(shapes)
-    # classified = cluster_shapes(shapes, head_tail_breaks)
-    classified = cluster_shapes(shapes, cluster_by_size_kde)
-    return classified
+def classify_shapes(shapes, shape_params, num_of_shapes, skew_tol=0.2):
+    return cluster_shapes_by(shape_params, 'size', cluster_by_kde)
     # for i in num_of_shapes:
     #     try:
     #         min_dist, max_dist = extremes[i]
@@ -242,7 +344,6 @@ def classify_shapes(shapes, centroids, extremes, num_of_shapes, skew_tol=0.2):
     #     except KeyError:
     #         #only a contour, sinusoid
     #         classified[i] = ShapeTypes.sinusoid
-    pass
 
 
 @timer
@@ -258,16 +359,43 @@ def color_classified_shapes(img, shapes, extremes, centroids, classified):
 
 
 @timer
-def process_img(img_file, outfile):
+def find_split_shapes_structure(bw_mask, num_of_splitting_passes=2):
+    processed_masks = []
+    for mask in build_contourless_masks(bw_mask, num_of_splitting_passes):
+        processed_masks.append(find_shapes_and_contours(mask, save_shape_parameters=True))
+    for i in range(len(processed_masks) - 1, 0, -1):
+        shapes, contours, params = processed_masks[i - 1]
+        subshapes, subcontours, subparams = processed_masks[i]
+        split_ids = split_shapes(shapes, subshapes, contours, subcontours)
+        params = update_split_shape_params(params, subparams, split_ids)
+    return shapes, contours, params
+
+
+@timer
+def process_img(img_file, out_file):
     img = cv2.imread(img_file)
     bw_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, bw_mask = cv2.threshold(bw_img, 175, True, cv2.ADAPTIVE_THRESH_GAUSSIAN_C)
     bw_mask = np.asarray(bw_mask, dtype=bool)
-    # first pass, try to remove some contours
-    remove_contours(bw_mask, 1)
+    num_of_splitting_passes = 2
+    shapes, contours, params = find_split_shapes_structure(bw_mask, num_of_splitting_passes)
+    color_img = np.copy(img)
+    color_shapes_and_contours(color_img, shapes, contours, params, True)
+    show_img(color_img)
+    save_fig(color_img, out_file)
+        # color_img = np.copy(img)
+        # approx_circles = shape_params[np.where(shape_params['skew'] > 0.2)]['id']
+        # idxs = np.where(np.isin(shapes, approx_circles))
+        # color_img[idxs + (0,)] = 0
+        # color_img[idxs + (1,)] = 100
+        # color_img[idxs + (2,)] = 0
+        # for s in approx_circles:
+        #     color_single_shape_extremes(color_img, shape_params, s)
+        # save_fig(color_img, f"imgs/out/g_{i}.png")
+    # remove_contours(bw_mask, 1)
     # 2nd pass, grab shapes
-    shapes, contours, centroids, extremes, skews, num_of_shapes = find_shapes_and_contours(bw_mask, save_shape_parameters=True)
-    colored_img = np.copy(img)
+    #
+    # colored_img = np.copy(img)
     # color_shapes_and_contours(colored_img, shapes, contours, num_of_shapes)
     # centroids
     # color_centroids(img, centroids)
@@ -275,14 +403,15 @@ def process_img(img_file, outfile):
     # closest, farthest = calc_contour_extremes(contours, centroids, num_of_shapes)
     # color_contour_extremes(colored_img, extremes, centroids, num_of_shapes)
     # show_img(colored_img)
-    classified = classify_shapes(shapes, centroids, extremes, num_of_shapes)
-    print(len(classified))
-    color_classified_shapes(colored_img, shapes, extremes, centroids, classified)
-    show_img(colored_img)
+    # classified = classify_shapes(shapes, shape_params, num_of_shapes)
+    # print(len(classified))
+    # color_classified_shapes(colored_img, shapes, extremes, centroids, classified)
+    # show_img(colored_img)
+    # print(shape_params[0])
 
 
 img_file = "imgs/010007.tif"
-out_name = "tmp"
+out_name = "split_twice"
 out_file = f"imgs/out/{out_name}.png"
 # process_img = timer(process_img)
 # remove_contours = timer(remove_contours)
