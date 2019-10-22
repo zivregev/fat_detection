@@ -7,7 +7,9 @@ import time
 import enum
 import sklearn.neighbors
 
-param_dtype = np.dtype([('id', int), ('size', int), ('centroid_y', int), ('centroid_x', int), ('min_pt_y', int), ('min_pt_x', int), ('max_pt_y', int), ('max_pt_x', int), ('skew', float)])
+param_dtype = {'names': ['id', 'size', 'centroid_y', 'centroid_x', 'min_pt_y', 'min_pt_x', 'max_pt_y', 'max_pt_x', 'skew'],
+               'formats': [int, int, int, int, int, int, int, int, float]}
+    # np.dtype([('id', int), ('size', int), ('centroid_y', int), ('centroid_x', int), ('min_pt_y', int), ('min_pt_x', int), ('max_pt_y', int), ('max_pt_x', int), ('skew', float)])
 
 total_time = {}
 
@@ -34,6 +36,7 @@ def show_img(img):
     ax.axis("off")
     ax.imshow(img, cmap="gray")
     plt.show()
+    plt.close(fig)
 
 
 def save_fig(img, name):
@@ -372,6 +375,63 @@ def find_split_shapes_structure(bw_mask, num_of_splitting_passes=2):
 
 
 @timer
+def setup_img(img):
+    bw_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, bw_mask = cv2.threshold(bw_img, 175, True, cv2.ADAPTIVE_THRESH_GAUSSIAN_C)
+    bw_mask = np.asarray(bw_mask, dtype=bool)
+    num_of_splitting_passes = 2
+    return find_split_shapes_structure(bw_mask, num_of_splitting_passes)
+
+
+@timer
+def ellipse_rotations(centers, vertices):
+    maj_ax = centers - vertices
+    rotations = np.degrees(np.arctan2(maj_ax[:, 1], maj_ax[:, 0]))
+    return rotations
+
+
+@timer
+def ellipse_axes(centers, vertices, covertices):
+    maj_ax = centers - vertices
+    min_ax = centers - covertices
+    maj_ax_norm = np.linalg.norm(maj_ax, axis=1)
+    min_ax_norm = np.linalg.norm(min_ax, axis=1)
+    ax_norms = np.rint(np.column_stack((maj_ax_norm, min_ax_norm)))
+    return ax_norms
+
+
+@timer
+def get_ellipse_params(params):
+    ids = params['id']
+    centers = np.column_stack((params['centroid_x'], params['centroid_y']))
+    vertices = np.column_stack((params['max_pt_x'], params['max_pt_y']))
+    covertices = np.column_stack((params['min_pt_x'], params['min_pt_y']))
+    return np.column_stack((ids, centers, ellipse_axes(centers, vertices, covertices), ellipse_rotations(centers, vertices)))
+
+
+@timer
+def ellipse_params_from_row(row):
+    return int(row[0]), tuple(row[[1, 2]].astype(int)), tuple(row[[3, 4]].astype(int)), row[5]
+
+
+@timer
+def draw_ellipse(img, id, center, axes, rotation):
+    cv2.ellipse(img, center, axes, rotation, 0, 360, id, -1)
+
+
+@timer
+def find_ellipses(shape, params):
+    ellipses = np.zeros(shape=shape, dtype=int)
+    draw_ellipses(ellipses, params)
+    return ellipses
+
+@timer
+def draw_ellipses(img, params):
+    for id, center, axes, rotation in np.apply_along_axis(ellipse_params_from_row, arr=get_ellipse_params(params), axis=1):
+        draw_ellipse(img, id, center, axes, rotation)
+
+
+@timer
 def process_img(img_file, out_file):
     img = cv2.imread(img_file)
     bw_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -410,7 +470,9 @@ def process_img(img_file, out_file):
     # print(shape_params[0])
 
 
-img_file = "imgs/010007.tif"
+# img_file = "imgs/010007.tif"
+img_file = "imgs/edited.png"
+img = cv2.imread(img_file)
 out_name = "split_twice"
 out_file = f"imgs/out/{out_name}.png"
 # process_img = timer(process_img)
@@ -419,7 +481,7 @@ out_file = f"imgs/out/{out_name}.png"
 # color_shapes_and_contours = timer(color_shapes_and_contours)
 # find_centroids = timer
 
-process_img(img_file, out_file)
-
-for func in total_time:
-    print(f"total time in {func.__name__}: {total_time[func]}")
+if __name__ == "main":
+    process_img(img_file, out_file)
+    for func in total_time:
+        print(f"total time in {func.__name__}: {total_time[func]}")
