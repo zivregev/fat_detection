@@ -2,9 +2,14 @@ import numpy as np
 import sklearn.neighbors
 import scipy.signal
 import cv2
+from enum import Enum
+
 
 skew_dtype = {'names': ['id', 'skew'], 'formats': [int, float]}
 
+class ConfirmedType(Enum):
+    INCLUDE = 1
+    EXCLUDE = 0
 
 def head_tail_breaks(shapes_sizes, key_idx = 1, iterations=100, tol=0.3):
     m = np.mean(shapes_sizes[:, key_idx])
@@ -53,8 +58,13 @@ def guess_bandwidth(sizes):
 def classify_shapes(shape_params, by):
     return cluster_array_by_column(shape_params, by, cluster_by_kde)
 
+def classify_by_size(params, min_shape_size=5):
+    non_trivial_shapes = params[params['size'] > min_shape_size]
+    return top_down_cluster(params, non_trivial_shapes['id'], by='size')
 
-def drop_larger_shapes(params, min_shape_size=5, min_to_max_size_in_cluster_ration=5):
+
+
+def drop_larger_shapes(params, min_shape_size=5, min_to_max_size_in_cluster_ration=5, confirmed_shapes=None):
     non_trivial_shapes = params[params['size'] > min_shape_size]
     clx = top_down_cluster(params, non_trivial_shapes['id'], by='size')
     #remove singleton clusters
@@ -64,7 +74,38 @@ def drop_larger_shapes(params, min_shape_size=5, min_to_max_size_in_cluster_rati
     max_size_in_most_numerous = max(params[np.where(np.isin(params['id'], most_numerous_type))]['size'])
     clx = [c for c in clx if min(params[np.where(np.isin(params['id'], c))]['size']) <
            min_to_max_size_in_cluster_ration * max_size_in_most_numerous]
+
     return clx
+
+def apply_confirmed_shapes_to_clustering(clx, confirmed_shapes):
+    confirmed_included = []
+    confirmed_excluded = []
+    unconfirmed = []
+    for c in clx:
+        include = False
+        exclude = False
+        for shape_id in confirmed_shapes:
+            shape_type = confirmed_shapes[shape_id]
+            if shape_id in c:
+                if shape_type == ConfirmedType.INCLUDE:
+                    include = True
+                else:
+                    exclude = True
+            if include and exclude:
+                break
+        if (include and exclude) or ((not include) and (not exclude)):
+            unconfirmed.append(c)
+        elif include:
+            confirmed_included.append(c)
+        else:
+            confirmed_excluded.append(c)
+    return confirmed_included, confirmed_excluded, unconfirmed
+
+
+
+
+def classify(params, confirmed_shapes=None):
+
 
 
 def drop_skewed_shapes(params, non_trivial_ids):
