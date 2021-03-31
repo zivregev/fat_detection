@@ -37,7 +37,7 @@ def cluster_array_by_column(shape_params, column_name, cluster_func, *args, **kw
 
 
 def cluster_by_kde(sizes, bandwidth=2.0, samples=6000):
-    print(len(sizes))
+    # print(len(sizes))
     s_d = np.linspace(0.8 * np.min(sizes), 1.2 * np.max(sizes), samples)
     kde = sklearn.neighbors.KernelDensity(bandwidth=guess_bandwidth(sizes), kernel="gaussian").fit(sizes.reshape(-1, 1))
     logprob = kde.score_samples(s_d.reshape(-1, 1))
@@ -58,15 +58,16 @@ def guess_bandwidth(sizes):
 def classify_shapes(shape_params, by):
     return cluster_array_by_column(shape_params, by, cluster_by_kde)
 
-def classify_by_size(params, min_shape_size=5):
+def classify_by_size(params, min_shape_size):
     non_trivial_shapes = params[params['size'] > min_shape_size]
     return top_down_cluster(params, non_trivial_shapes['id'], by='size')
 
 
 
 def drop_larger_shapes(params, min_shape_size=5, min_to_max_size_in_cluster_ration=5, confirmed_shapes=None):
-    non_trivial_shapes = params[params['size'] > min_shape_size]
-    clx = top_down_cluster(params, non_trivial_shapes['id'], by='size')
+    clx = classify_by_size(params, min_shape_size)
+    # non_trivial_shapes = params[params['size'] > min_shape_size]
+    # clx = top_down_cluster(params, non_trivial_shapes['id'], by='size')
     #remove singleton clusters
     clx = [c for c in clx if len(c) > 1]
     #drop all clusters that are ten times as large as max of the most numerous cluster
@@ -102,10 +103,32 @@ def apply_confirmed_shapes_to_clustering(clx, confirmed_shapes):
     return confirmed_included, confirmed_excluded, unconfirmed
 
 
+def classify_by_size_with_confirmed(params, confirmed_shapes, min_shape_size=5, error_margin = 0.2):
+    included, excluded, unconfirmed = apply_confirmed_shapes_to_clustering(classify_by_size(params, min_shape_size), confirmed_shapes)
+
+    def _find_minmax_class(c, f):
+        return f(params[np.where(np.isin(params['id'], c))]['size'])
+
+    def _find_minmax_in_classification(clx, f):
+        return f([_find_minmax_class(c, f) for c in clx])
+
+    assumed = np.copy(included)
+    if len(included) > 0:
+        min_included = _find_minmax_in_classification(included, min)
+        max_included = _find_minmax_in_classification(included, max)
+        assumed += [c for c in unconfirmed if _find_minmax_class(c, min) >= min_included and _find_minmax_class(c, max) <= max_included]
+    if len(excluded) > 0:
+        min_excluded = _find_minmax_in_classification(excluded, min)
+        max_excluded = _find_minmax_in_classification(excluded, max)
 
 
-def classify(params, confirmed_shapes=None):
 
+
+def classify(params, confirmed_shapes):
+    if len(confirmed_shapes) > 0:
+        pass
+    else:
+        return drop_skewed_shapes(params, np.concatenate(drop_larger_shapes(params)))
 
 
 def drop_skewed_shapes(params, non_trivial_ids):

@@ -1,9 +1,11 @@
 from tkinter import Tk, filedialog
 from runner import FattyImg
 import cv2
+import os
 
 class SingleImageEditor:
-    AREA_TYPES = ['fatty_cell', 'blood_vessel']
+
+    TAGGED_IMG_SUFFIX = "_tagged"
 
     def __init__(self, img_file):
         self.img_name = img_file
@@ -30,7 +32,7 @@ class SingleImageEditor:
             except KeyError:
                 area_type = 0
             try:
-                if area_type >= len(SingleImageEditor.AREA_TYPES):
+                if area_type >= len(FattyImg.AREA_TYPES):
                     del self.confirmed_shapes[shape_id]
                 else:
                     self.confirmed_shapes[shape_id] = area_type
@@ -42,7 +44,7 @@ class SingleImageEditor:
 
     def _get_updated_img(self):
         if len(self.confirmed_shapes) > 0:
-            clx_by_mark = [[] for type in SingleImageEditor.AREA_TYPES]
+            clx_by_mark = [[] for type in FattyImg.AREA_TYPES]
             for k, v in self.confirmed_shapes.items():
                 clx_by_mark[v].append(k)
             updated_img = self.fatty_img.get_marked_img(clx_by_mark)
@@ -51,9 +53,9 @@ class SingleImageEditor:
         return updated_img
 
     def mark_area_types(self):
-        for i in range(len(SingleImageEditor.AREA_TYPES)):
-            print(f"Double click on any area {i} times to mark it as {SingleImageEditor.AREA_TYPES[i]}")
-        print(f"Double click on any area {len(SingleImageEditor.AREA_TYPES)} times to unmark it.")
+        for i in range(len(FattyImg.AREA_TYPES)):
+            print(f"Double click on any area {i} times to mark it as {FattyImg.AREA_TYPES[i]}")
+        print(f"Double click on any area {len(FattyImg.AREA_TYPES)} times to unmark it.")
         clicked_pxls = []
         updated = True
         while True:
@@ -68,11 +70,19 @@ class SingleImageEditor:
             key = cv2.waitKey(1)
             if key != -1:
                 break
+        save_img = get_single_char_input(f"Save tagged image y/n? \n", ['y', 'n'])
+        if save_img:
+            self.save_tagged_img(self._get_updated_img(), self.img_name)
         cv2.destroyWindow(self.window_name)
 
     def on_area_click(event, x, y, flags, clicked_pxls):
         if event == cv2.EVENT_LBUTTONDBLCLK:
             clicked_pxls.append((y, x))
+
+    def save_tagged_img(self, img, untagged_file_name):
+        root, ext = os.path.splitext(untagged_file_name)
+        root += SingleImageEditor.TAGGED_IMG_SUFFIX
+        cv2.imwrite(root + ext, img)
 
 def get_image_list_from_user():
     root = Tk()
@@ -107,7 +117,7 @@ if __name__ == "__main__":
     imgs_to_process = get_image_list_from_user()
     continue_to_classify = (op_mode == 's')
     if op_mode == 'p':
-        continue_after = get_single_char_input("Would you like to continue with classification after preprocessing, or quit and come back later? y/n: \n", ['y', 'n'])
+        continue_after = get_single_char_input("Would you like to continue with classification after preprocessing (Or quit and come back later)? y/n: \n", ['y', 'n'])
         preprocess_all_imgs(imgs_to_process)
         if continue_after == 'y':
             continue_to_classify = True

@@ -8,6 +8,8 @@ in_dir = "imgs/"
 out_dir = "imgs/out/"
 
 class FattyImg:
+    AREA_TYPES = ['fatty_cell', 'blood_vessel']
+
     def __init__(self, img_file):
         self.img_file = Path(img_file)
         self.img = cv2.imread(img_file)
@@ -54,7 +56,7 @@ class FattyImg:
         return self._get_basic_data_npz_path().exists()
 
     def save_basic_data_to_file(self, overwrite_existing=True):
-        if not overwrite_existing and self._does_basic_data_file_exist():
+        if (not overwrite_existing) and self._does_basic_data_file_exist():
             raise ValueError(f"Basic file data npz already exists for {self.img_file}, and should not be overwritten.")
         else:
             np.savez_compressed(self._get_basic_data_path(), shapes=self.basic_structure['shapes'],
@@ -89,6 +91,7 @@ class FattyImg:
         num_of_white_pxls = detector.get_num_of_white_pxls(self.img)
         num_of_detected_pxls = np.sum(self.params[np.isin(self.params['id'], np.concatenate(self.clx))]['size'])
         return num_of_white_pxls, num_of_detected_pxls
+
 
 def run_on_folder(folder_base):
     base_path = in_dir + folder_base + "/"
